@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {handleAPI} from './api';
+import {DEMO_WALLET} from '../shared/types';
+const req=(path:string,body?:unknown)=>new Request('http://localhost/api/'+path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+test('health and complete create, retrieve, search, transaction, report API workflow',async()=>{const health=await handleAPI(req('health'));assert.equal(health.status,200);const create=await handleAPI(req('investigations',{wallet:DEMO_WALLET,mode:'demo'}));assert.equal(create.status,201);const r=await create.json() as any;assert.equal(r.nearest.entity.entityName,'Example VASP Exchange');assert.equal((await handleAPI(req('investigations/'+r.id))).status,200);const found=await (await handleAPI(req('wallet/'+DEMO_WALLET))).json() as any;assert.ok(found.investigations.length);assert.equal((await handleAPI(req('transactions/'+r.transactions[0].hash))).status,200);const report=await handleAPI(req('report',{id:r.id}));assert.equal(report.status,200);assert.ok((await report.text()).includes('Transaction path'));});
+test('unconfigured live mode falls back honestly without replacing the input wallet',async()=>{const response=await handleAPI(req('trace',{wallet:'0x'+'9'.repeat(40),mode:'live'}));const r=await response.json() as any;assert.equal(r.mode,'demo');assert.equal(r.wallet,'0x'+'9'.repeat(40));assert.equal(r.transactions.length,0);assert.ok(r.modeReason.includes('not configured'));});
+test('bad wallet returns 400; missing record returns 404',async()=>{assert.equal((await handleAPI(req('trace',{wallet:'invalid'}))).status,400);assert.equal((await handleAPI(req('investigations/missing'))).status,404);});
+test('backend rate limit blocks excessive requests',async()=>{let response;for(let i=0;i<41;i++)response=await handleAPI(req('health'),{},'rate-test');assert.equal(response!.status,429);});

@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {investigate} from './engine';
+import {MockBlockchainProvider,demoTransactions} from './demo';
+import {DEMO_WALLET,type BlockchainProvider,type Transaction} from './types';
+import {reportHTML} from './report';
+const custom=(rows:Transaction[],mode:'live'|'demo'='demo'):BlockchainProvider=>({mode,async getWalletTransactions(a){return rows.filter(t=>t.from===a||t.to===a);},async getTransaction(h){return rows.find(t=>t.hash===h)||null;},async getTokenTransfers(){return [];},async getBlockTimestamp(){return '';}});
+test('deterministic demo finds exact three-hop VASP path and supported score',async()=>{const r=await investigate({wallet:DEMO_WALLET},new MockBlockchainProvider(),'demo');assert.equal(r.transactions.length,3);assert.equal(r.addresses.length,4);assert.equal(r.nearest?.hops,3);assert.equal(r.nearest?.received,'2.35');assert.equal(r.risk.score,80);assert.equal(r.risk.factors.find(f=>f.name==='Multiple recipients')?.points,0);assert.equal(r.nearest?.path.length,3);});
+test('unknown wallet has no invented transfers, VASP or risk',async()=>{const r=await investigate({wallet:'0x'+'9'.repeat(40)},new MockBlockchainProvider(),'demo');assert.equal(r.transactions.length,0);assert.equal(r.nearest,null);assert.equal(r.risk.score,0);});
+test('invalid wallet is rejected',async()=>{await assert.rejects(investigate({wallet:'<script>alert(1)</script>'},new MockBlockchainProvider(),'demo'));});
+test('two-hop limit does not reach three-hop exchange',async()=>{const r=await investigate({wallet:DEMO_WALLET,maxHops:2},new MockBlockchainProvider(),'demo');assert.equal(r.transactions.length,2);assert.equal(r.nearest,null);});
+test('live trace never uses fictional demo labels',async()=>{const r=await investigate({wallet:DEMO_WALLET},custom(demoTransactions,'live'),'live');assert.equal(r.nearest,null);assert.equal(r.mode,'live');});
+test('pre-receipt onward transfer is excluded',async()=>{const rows=demoTransactions.map(t=>({...t}));rows[1].timestamp='2026-10-03T10:00:00.000Z';const r=await investigate({wallet:DEMO_WALLET},custom(rows),'demo');assert.equal(r.transactions.length,1);assert.equal(r.nearest,null);});
+test('cycles are excluded and traversal terminates',async()=>{const rows=[...demoTransactions.slice(0,2),{...demoTransactions[2],to:DEMO_WALLET}];const r=await investigate({wallet:DEMO_WALLET},custom(rows),'demo');assert.equal(r.transactions.length,2);assert.equal(r.nearest,null);});
+test('printable report includes full evidence and escapes hostile case data',async()=>{const r=await investigate({wallet:DEMO_WALLET,description:'<script>alert(1)</script>'},new MockBlockchainProvider(),'demo');const html=reportHTML(r);assert.ok(html.includes(demoTransactions[2].hash));assert.ok(html.includes('FICTIONAL DATASET'));assert.ok(!html.includes('<script>alert(1)</script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('window.print()'));assert.ok(!html.includes('href="https://etherscan.io/tx/'));});
